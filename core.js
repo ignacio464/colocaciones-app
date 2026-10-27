@@ -245,6 +245,7 @@ C.metr = function (col, cfg) {
 /* ---------- estado ---------- */
 C.newState = () => ({ v: 1, cfg: C.defaultConfig(), rends: [], cols: [], movs: [], meta: { next: 1, ultBackup: null, cal: null } });
 C.newId = (S) => S.meta.next++;
+C.renumerar = (S) => { S.cols.slice().sort((a, b) => a.n - b.n || a.id - b.id).forEach((c, i) => { c.n = i + 1; }); };
 C.nextN = (S) => S.cols.reduce((m, c) => Math.max(m, c.n || 0), 0) + 1;
 C.saldo = (S) => S.movs.reduce((a, m) => a + (C.TIPOS_IN.indexOf(m.tipo) >= 0 ? m.imp : -m.imp), 0);
 C.addMov = function (S, m) {

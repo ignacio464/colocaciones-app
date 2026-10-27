@@ -144,8 +144,11 @@ function rowNode(r, idx) {
   return el.card;
 }
 
+function isEmptyRow(r) { return !r.cap.trim() && !r.alias.trim() && !r.total.trim(); }
 async function guardarRendicion() {
   const S = App.S, rd = App.ui.rend, hoy = App.hoy();
+  const llenas = rd.rows.filter((x) => !isEmptyRow(x));
+  if (llenas.length && llenas.length !== rd.rows.length) rd.rows = llenas; // se ignoran las filas totalmente vacías
   let first = null, nextAuto = nextNForRows();
   const filas = [], ns = [];
   rd.rows.forEach((r) => {
@@ -249,11 +252,10 @@ SC.rendicion = function () {
           l.ok ? null : h('tr', null, h('td', { colspan: 7 }, h('span', { class: 'tag bad' }, 'Inválida'), ' ' + l.motivo))])))),
       bad ? h('div', { class: 'alert warn' }, bad + (bad === 1 ? ' línea inválida no se va a agregar (ver el motivo arriba).' : ' líneas inválidas no se van a agregar (ver los motivos arriba).')) : null,
       okN ? UI.btn('Agregar ' + okN + (okN === 1 ? ' fila' : ' filas') + ' a la grilla', 'pri full', () => {
+        rd.rows = rd.rows.filter((x) => !isEmptyRow(x)); // las filas vacías no cuentan ni para el N°
         pv.filter((l) => l.ok).forEach((l) => {
           const r = newRow(rd.rows[rd.rows.length - 1]);
           Object.assign(r, { alias: l.row.alias, cap: numStr(l.row.cap), plazo: String(l.row.plazo), ent: C.fmtDate(l.row.ent), cob: C.fmtDate(l.row.cob), origen: l.row.origen, total: numStr(l.row.total), imported: l.row.imported, manual: false, last: 'cob', marca: l.row.marca });
-          const prev = rd.rows[rd.rows.length - 1];
-          if (prev && !prev.cap && !prev.alias && rd.rows.length === 1) rd.rows.pop();
           rd.rows.push(r);
         });
         rd.preview = null; rd.txt = ''; UI.toast(okN + ' filas agregadas a la grilla.'); App.render();
@@ -417,7 +419,10 @@ SC.colocaciones = function () {
       h('details', null, h('summary', { class: 'btn ghost full', style: null }, 'Filtros'), filtros),
       h('details', null, h('summary', { class: 'btn ghost full', style: null }, 'Recupero proyectado'), h('div', { class: 'card' }, UI.field('Hasta la fecha', recIn), recBox)),
       h('p', { class: 'mut small' }, list.length + ' de ' + all.length + ' colocaciones'),
-      cards.length ? cards : h('p', { class: 'mut' }, S.cols.length ? 'Ninguna colocación coincide con los filtros.' : 'Todavía no hay colocaciones. Cargá una en Rendición.')),
+      cards.length ? cards : h('p', { class: 'mut' }, S.cols.length ? 'Ninguna colocación coincide con los filtros.' : 'Todavía no hay colocaciones. Cargá una en Rendición.'),
+      S.cols.length && !sel ? h('div', { style: null }, UI.btn('Renumerar desde 1', 'ghost sm', async () => {
+        if (await UI.confirm('Se reasignan los N° desde 1 siguiendo el orden actual de N°, sin saltos. ¿Continuar?', { ok: 'Renumerar' })) { C.renumerar(S); await App.commit(); UI.toast('N° renumerados.'); }
+      })) : null),
     bar
   };
 };
