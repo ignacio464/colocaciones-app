@@ -59,9 +59,12 @@ App.alertas = function () {
 SC.inicio = function () {
   const S = App.S, hoy = App.hoy(), cur = C.enCurso(S);
   const sum = (a, f) => a.reduce((x, c) => x + f(c), 0);
-  const cobradas = S.cols.filter((c) => c.estado === 'Cobrada');
   const cj = C.cajas(S), R = C.radiografia(S, hoy);
+  const dias = App.ui.periodoDias || 30;
+  const P = C.periodo(S, hoy, dias);
+  const pct = (v) => (v == null ? '—' : C.pct(v, 1));
   const nodes = [];
+  nodes.push(h('div', { class: 'bloque-t ahora' }, 'AHORA', h('span', { class: 'small' }, ' · lo que está en curso')));
   nodes.push(h('div', { class: 'grid2' },
     h('button', { type: 'button', class: 'card caja tap' + (cj.disp < 0 ? ' neg' : ''), onclick: () => App.go('dinero'), 'aria-label': 'Disponible para colocar. Ver plata' },
       h('div', { class: 'mut small' }, 'Disponible para colocar'), h('div', { class: 'big num' }, $(cj.disp))),
@@ -77,12 +80,44 @@ SC.inicio = function () {
   App.alertas().forEach((a) => nodes.push(h('div', { class: 'alert ' + a.cls }, h('div', { class: 'row' }, h('div', { class: 'grow' }, a.txt), a.go ? UI.btn('Ver', 'sm ghost', () => App.go(a.go)) : null))));
   if (cj.disp < 0) nodes.push(h('div', { class: 'alert warn' }, 'El disponible para colocar está en negativo: falta cargar capital o pasar plata desde «Cobrado por asignar».'));
   nodes.push(h('div', { class: 'stats', style: null },
-    App.stat('Capital en curso', $(sum(cur, (c) => c.cap))),
-    App.stat('Total a devolverse', $(sum(cur, (c) => c.total))),
-    App.stat('Ganancia a cobrar', $(sum(cur, (c) => c.total - c.cap))),
-    App.stat('Ganancia neta ya cobrada', $(sum(cobradas, (c) => c.neta))),
-    App.stat('Colocaciones en curso', String(cur.length)),
-    App.stat('Por devolver al proveedor', $(Math.max(0, R.finPend)))));
+    App.stat('Colocado en curso · ' + cur.length + (cur.length === 1 ? ' colocación' : ' colocaciones'), $(R.colocado), 'ahora'),
+    App.stat('Total a devolverse', $(sum(cur, (c) => c.total)), 'ahora'),
+    App.stat('Ganancia neta a cobrar', $(R.netaXC), 'ahora'),
+    App.stat('Plazo promedio', R.plazoCur == null ? '—' : C.fmt(R.plazoCur, 0) + ' días', 'ahora'),
+    App.stat('Rinde mensual (en curso)', pct(R.tasaNetaCur), 'ahora'),
+    App.stat('Por devolver al proveedor', $(Math.max(0, R.finPend)), 'ahora')));
+
+  // Período
+  const fila = (k, a, b) => h('tr', null, h('td', null, k), h('td', { class: 'num' }, a), h('td', { class: 'num' }, b));
+  const dif = P.delta == null ? 'sin datos del período anterior' : (P.delta >= 0 ? '▲ +' : '▼ ') + C.fmt(P.delta, 1) + '% (' + (P.act.neta - P.prev.neta >= 0 ? '+' : '') + $(P.act.neta - P.prev.neta) + ')';
+  nodes.push(h('div', { class: 'card ahora' },
+    h('div', { class: 'row sp' }, h('strong', null, 'Últimos ' + dias + ' días'), h('span', { class: 'mut small' }, C.fmtDM(P.desde) + ' al ' + C.fmtDM(P.hasta))),
+    h('div', { class: 'chips' }, [7, 30, 60, 90].map((d) => h('button', { type: 'button', class: 'chip' + (d === dias ? ' on' : ''), onclick: () => { App.ui.periodoDias = d; App.render(); } }, d + ' días'))),
+    h('div', { class: 'mut small' }, 'Ganado (la ganancia repartida día por día)'),
+    h('div', { class: 'big num' }, $(P.act.neta)),
+    h('div', null, 'Rinde ', h('strong', null, pct(P.act.rinde)), ' mensual sobre ' + $(P.act.capProm) + ' colocados en promedio'),
+    h('div', { class: 'mut small' }, 'Contra los ' + dias + ' días anteriores: ' + dif),
+    h('div', { class: 'live' },
+      h('div', null, 'Cobrado en el período (ganancia neta que efectivamente entró): ', h('strong', null, $(P.cobrado.neta)), ' · ' + P.cobrado.cant + (P.cobrado.cant === 1 ? ' colocación' : ' colocaciones')),
+      h('div', null, 'A cobrar en los próximos ' + dias + ' días: ', h('strong', null, $(P.proximos.total)), ' (ganancia neta ' + $(P.proximos.neta) + ') · ' + P.proximos.cant + (P.proximos.cant === 1 ? ' colocación' : ' colocaciones') + (P.proximos.vencidas ? ', ' + P.proximos.vencidas + ' vencida' + (P.proximos.vencidas === 1 ? '' : 's') : '')),
+      h('div', null, 'Gastos del período (aparte, no restan al rendimiento): ', h('strong', null, $(P.gastos)))),
+    h('table', null, h('thead', null, h('tr', null, ['', 'Propio', 'Financiado'].map((t) => h('th', null, t)))),
+      h('tbody', null,
+        fila('Capital promedio', $(P.act.Propio.capProm), $(P.act.Financiado.capProm)),
+        fila('Ganado', $(P.act.Propio.neta), $(P.act.Financiado.neta)),
+        fila('Rinde mensual', pct(P.act.Propio.rinde), pct(P.act.Financiado.rinde)),
+        fila('Costo del financiamiento', '—', $(P.act.Financiado.costo))))));
+
+  // Histórico
+  nodes.push(h('div', { class: 'bloque-t hist' }, 'HISTÓRICO', h('span', { class: 'small' }, ' · lo ya cobrado, desde que empezaste')));
+  nodes.push(h('div', { class: 'stats', style: null },
+    App.stat('Colocaciones cobradas', String(R.nCob), 'hist'),
+    App.stat('Capital que pasó por ellas', $(R.capCob), 'hist'),
+    App.stat('Ganancia neta cobrada', $(R.netaCobrada), 'hist'),
+    App.stat('Rinde mensual (cobradas)', pct(R.tasaNetaCob), 'hist'),
+    App.stat('Plazo promedio', R.plazoCob == null ? '—' : C.fmt(R.plazoCob, 0) + ' días', 'hist'),
+    App.stat('Retirado · Gastos', $(R.retiros) + ' · ' + $(R.gastos), 'hist')));
+
   const pr = C.proximaRendicion(S, hoy);
   nodes.push(h('h2', null, 'Próxima rendición'));
   nodes.push(pr ? h('button', { type: 'button', class: 'card full', style: null, onclick: () => App.go('vencimientos'), 'aria-label': 'Ver vencimientos' },
@@ -132,8 +167,8 @@ App.abrirMov = function (kind, mov, despues) {
       campos.push(UI.field('¿De dónde sale la plata?', cajaSel), UI.field('¿Para qué?', destSel));
     }
     if (kind === 'capital') {
-      origenSel = UI.sel([['mio', 'Es mío (aporte)'], ['proveedor', 'Me lo prestó el proveedor']], mov && mov.tipo === 'Financiamiento recibido' ? 'proveedor' : 'mio');
-      campos.push(UI.field('¿De quién es?', origenSel));
+      origenSel = h('input', { type: 'checkbox', checked: !!(mov && mov.tipo === 'Financiamiento recibido') });
+      campos.push(h('label', { class: 'chk' }, origenSel, 'Es plata prestada por el proveedor (hay que devolverla)'));
     }
     const hintBox = h('div', { class: 'small' });
     const hint = () => {
@@ -146,12 +181,12 @@ App.abrirMov = function (kind, mov, despues) {
     const info = {
       pasar: 'Pasa plata de «Cobrado por asignar» a «Disponible para colocar», para ponerla a trabajar.',
       apartar: 'Saca plata de una caja para el proveedor, gastos o un retiro tuyo. Queda anotado con su nota.',
-      capital: 'Suma a «Disponible para colocar». No es ganancia. No cargues acá plata que ya viene de un cobro.'
+      capital: 'Suma a «Disponible para colocar». No es ganancia. Si te la prestó el proveedor, tildalo y queda anotada como deuda. No cargues acá plata que ya viene de un cobro.'
     }[kind];
     const guardar = async () => {
       const o = { kind, imp: C.parseNum(impIn.value), fecha: C.parseEntrega(fecha.value, App.hoy()), nota: nota.value.trim() };
       if (kind === 'apartar') { o.caja = cajaSel.value; o.destino = destSel.value; }
-      if (kind === 'capital') o.origen = origenSel.value;
+      if (kind === 'capital') o.origen = origenSel.checked ? 'proveedor' : 'mio';
       const e = C.validarMov(S, o, mov);
       if (e) { err.replaceChildren(errBox([e])); return; }
       C.guardarMov(S, o, mov);

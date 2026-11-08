@@ -480,11 +480,49 @@ C.radiografia = function (S, hoy) {
   const venc = cur.filter((c) => c.cob < hoy);
   R.vencidas = { cant: venc.length, cap: sum(venc, (c) => c.cap), total: sum(venc, (c) => c.total), neta: sum(venc, (c) => C.metr(c, cfg).neta) };
   // Toda la plata (las dos cajas) + lo que está colocado − lo que se debe = lo puesto + lo ganado − lo sacado
+  R.nCob = cob.length; R.capCob = sum(cob, (c) => c.cap);
+  R.plazoCur = R.colocado > 0 ? sum(cur, (c) => c.cap * c.plazo) / R.colocado : null;
+  R.plazoCob = R.capCob > 0 ? sum(cob, (c) => c.cap * c.plazo) / R.capCob : null;
   R.cuadreIzq = R.sinColocar + R.porAsignar + R.colocado - R.deuda;
   R.cuadreDer = R.aportes + R.netaCobrada - R.retiros - R.gastos;
   R.cuadreDif = R.cuadreIzq - R.cuadreDer;
   R.cuadreOk = Math.abs(R.cuadreDif) < 0.5;
   return R;
+};
+
+/* ---------- Rendimiento de un período (últimos N días) ----------
+   "Ganado": la ganancia de cada colocación repartida día por día (parte que cae dentro de la ventana).
+   "Cobrado": la ganancia neta de lo que se cobró dentro de la ventana (por fecha real de cobro).
+   Rinde mensual % = ganancia ganada / (capital × días colocado / 30). */
+C.periodo = function (S, hoy, dias) {
+  const cfg = S.cfg, D = C.isoToDay;
+  const h1 = D(hoy), d1 = h1 - dias + 1, p0 = d1 - dias, p1 = d1 - 1;
+  const vacio = () => ({ capDias: 0, neta: 0, bruta: 0, costo: 0 });
+  const calc = (a, b) => {
+    const r = Object.assign(vacio(), { Propio: vacio(), Financiado: vacio() });
+    S.cols.forEach((c) => {
+      const lo = Math.max(D(c.ent), a), hi = Math.min(D(c.cob) - 1, b), ov = Math.max(0, hi - lo + 1);
+      if (!ov) return;
+      const m = C.metr(c, cfg), f = ov / c.plazo;
+      [r, r[c.origen === 'Financiado' ? 'Financiado' : 'Propio']].forEach((t) => { t.capDias += c.cap * ov; t.neta += m.neta * f; t.bruta += m.gan * f; t.costo += m.costo * f; });
+    });
+    const fin = (t) => { t.capProm = t.capDias / dias; t.rinde = t.capDias > 0 ? t.neta / (t.capDias / 30) * 100 : null; };
+    fin(r); fin(r.Propio); fin(r.Financiado);
+    return r;
+  };
+  const act = calc(d1, h1), prev = calc(p0, p1);
+  const enVentana = (iso) => { const x = D(iso); return x >= d1 && x <= h1; };
+  const cobradas = S.cols.filter((c) => c.estado === 'Cobrada' && c.cobReal && enVentana(c.cobReal));
+  const finDias = C.addDays(hoy, dias);
+  const prox = C.enCurso(S).filter((c) => c.cob <= finDias);
+  const gastos = S.movs.filter((m) => m.tipo === 'Gasto' && enVentana(m.fecha)).reduce((a, m) => a + m.imp, 0);
+  return {
+    dias, desde: C.dayToIso(d1), hasta: hoy, act, prev,
+    delta: prev.neta > 0.5 ? (act.neta - prev.neta) / prev.neta * 100 : null,
+    cobrado: { cant: cobradas.length, neta: cobradas.reduce((a, c) => a + c.neta, 0), total: cobradas.reduce((a, c) => a + c.total, 0) },
+    proximos: { cant: prox.length, vencidas: prox.filter((c) => c.cob < hoy).length, total: prox.reduce((a, c) => a + c.total, 0), neta: prox.reduce((a, c) => a + C.metr(c, cfg).neta, 0) },
+    gastos
+  };
 };
 
 /* ---------- Calculadora ---------- */
