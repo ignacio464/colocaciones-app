@@ -5,8 +5,8 @@ const C = {};
 const r2 = (x) => { const v = Math.round(x * 100) / 100; return v === 0 ? 0 : v; };
 C.r2 = r2;
 
-C.TIPOS_IN = ['Aporte', 'Financiamiento recibido', 'Cobro'];
-C.TIPOS_OUT = ['Colocado', 'Pago de financiamiento', 'Retiro'];
+C.TIPOS_IN = ['Aporte', 'Financiamiento recibido', 'Cobro', 'Pasado a colocar'];
+C.TIPOS_OUT = ['Colocado', 'Pago de financiamiento', 'Retiro', 'Gasto'];
 C.TIPOS = C.TIPOS_IN.concat(C.TIPOS_OUT);
 C.COLORES = [
   { n: 'Rojo', c: '#c62828' }, { n: 'Naranja', c: '#ef6c00' }, { n: 'Amarillo', c: '#f9c800' },
@@ -247,13 +247,53 @@ C.newState = () => ({ v: 1, cfg: C.defaultConfig(), rends: [], cols: [], movs: [
 C.newId = (S) => S.meta.next++;
 C.renumerar = (S) => { S.cols.slice().sort((a, b) => a.n - b.n || a.id - b.id).forEach((c, i) => { c.n = i + 1; }); };
 C.nextN = (S) => S.cols.reduce((m, c) => Math.max(m, c.n || 0), 0) + 1;
-C.saldo = (S) => S.movs.reduce((a, m) => a + (C.TIPOS_IN.indexOf(m.tipo) >= 0 ? m.imp : -m.imp), 0);
+/* Dos cajas: "disp" (disponible para colocar) y "cobr" (cobrado por asignar).
+   Los movimientos viejos sin campo caja cuentan como "disp", así los datos anteriores siguen cerrando. */
+C.cajas = function (S, sinId) {
+  let d = 0, c = 0;
+  S.movs.forEach((m) => {
+    if (m.id === sinId) return;
+    const k = m.caja === 'cobr' ? 'cobr' : 'disp', v = m.imp;
+    if (m.tipo === 'Aporte' || m.tipo === 'Financiamiento recibido') d += v;
+    else if (m.tipo === 'Colocado') d -= v;
+    else if (m.tipo === 'Cobro') { if (k === 'cobr') c += v; else d += v; }
+    else if (m.tipo === 'Pasado a colocar') { c -= v; d += v; }
+    else if (m.tipo === 'Pago de financiamiento' || m.tipo === 'Retiro' || m.tipo === 'Gasto') { if (k === 'cobr') c -= v; else d -= v; }
+  });
+  return { disp: r2(d), cobr: r2(c) };
+};
+C.saldo = (S) => C.cajas(S).disp;
 C.addMov = function (S, m) {
   const mv = Object.assign({ id: C.newId(S), auto: false, colId: null, nota: '' }, m);
   S.movs.push(mv); return mv;
 };
 C.addAporte = (S, fecha, imp, nota) => C.addMov(S, { fecha, imp, tipo: 'Aporte', nota: nota || '' });
-C.addRetiro = (S, fecha, imp, nota) => C.addMov(S, { fecha, imp, tipo: 'Retiro', nota: nota || '' });
+C.addRetiro = (S, fecha, imp, nota, caja) => C.addMov(S, { fecha, imp, tipo: 'Retiro', caja: caja || 'disp', nota: nota || '' });
+C.DESTINOS = [['Proveedor', 'Pago de financiamiento'], ['Gastos', 'Gasto'], ['Retiro mío', 'Retiro'], ['Otro', 'Retiro']];
+/* Valida un movimiento manual antes de guardarlo. kind: 'pasar' | 'apartar' | 'capital'.
+   Devuelve un texto de error o null. "editando" es el movimiento que se está modificando (no se cuenta). */
+C.validarMov = function (S, o, editando) {
+  if (!(o.imp > 0)) return 'El importe debe ser mayor que 0.';
+  if (!o.fecha || !isFinite(C.isoToDay(o.fecha))) return 'La fecha no es válida.';
+  const cj = C.cajas(S, editando ? editando.id : null);
+  if (o.kind === 'pasar' && o.imp > cj.cobr + 0.005) return 'Solo hay ' + C.money(cj.cobr) + ' en "Cobrado por asignar".';
+  if (o.kind === 'apartar') {
+    const disp = o.caja === 'disp' ? cj.disp : cj.cobr;
+    if (o.imp > disp + 0.005) return 'Solo hay ' + C.money(disp) + ' en "' + (o.caja === 'disp' ? 'Disponible para colocar' : 'Cobrado por asignar') + '".';
+  }
+  return null;
+};
+/* Crea o modifica un movimiento manual. Devuelve el movimiento. */
+C.guardarMov = function (S, o, editando) {
+  let data;
+  if (o.kind === 'pasar') data = { tipo: 'Pasado a colocar', caja: 'cobr' };
+  else if (o.kind === 'apartar') data = { tipo: (C.DESTINOS.find((d) => d[0] === o.destino) || C.DESTINOS[2])[1], caja: o.caja, destino: o.destino };
+  else data = { tipo: o.origen === 'proveedor' ? 'Financiamiento recibido' : 'Aporte', caja: 'disp' };
+  data.fecha = o.fecha; data.imp = o.imp; data.nota = o.nota || '';
+  if (editando) { Object.assign(editando, data); return editando; }
+  return C.addMov(S, data);
+};
+C.kindDe = (m) => m.tipo === 'Pasado a colocar' ? 'pasar' : (m.tipo === 'Aporte' || m.tipo === 'Financiamiento recibido') ? 'capital' : 'apartar';
 
 C.validarFila = function (f) {
   if (!(f.cap > 0)) return 'El capital debe ser mayor que 0.';
@@ -294,27 +334,25 @@ C.resumenCobro = function (S, ids) {
     r.capital += c.cap; r.total += c.total; r.bruta += m.gan; r.costo += m.costo; r.neta += m.neta;
     if (c.origen === 'Financiado') r.pagoFin += c.cap + m.costo;
   });
-  r.reinv = r2(r.neta * S.cfg.reinv / 100);
-  r.retiro = r2(r.neta - r.reinv);
   return r;
 };
-C.cobrar = function (S, ids, fecha, reinvTotal) {
+/* Cobrar solo registra el cobro: el total entra a "Cobrado por asignar". No retira ni paga nada solo. */
+C.cobrar = function (S, ids, fecha) {
   const r = C.resumenCobro(S, ids);
-  if (!r.cols.length) return r;
-  const reinv = reinvTotal == null ? r.reinv : reinvTotal;
-  let restoR = reinv, restoN = r.neta;
-  r.cols.forEach((c, i) => {
+  r.cols.forEach((c) => {
     const m = C.metr(c, S.cfg);
-    const last = i === r.cols.length - 1;
-    const ri = last ? r2(restoR) : (restoN !== 0 ? r2(reinv * (m.neta / r.neta)) : 0);
-    restoR -= ri; restoN -= m.neta;
-    c.estado = 'Cobrada'; c.cobReal = fecha; c.costo = m.costo; c.neta = m.neta; c.reinv = ri; c.retiro = r2(m.neta - ri);
-    C.addMov(S, { fecha, imp: c.total, tipo: 'Cobro', auto: true, colId: c.id });
-    if (c.origen === 'Financiado') C.addMov(S, { fecha, imp: c.cap + m.costo, tipo: 'Pago de financiamiento', auto: true, colId: c.id });
-    if (c.retiro > 0) C.addMov(S, { fecha, imp: c.retiro, tipo: 'Retiro', auto: true, colId: c.id });
+    c.estado = 'Cobrada'; c.cobReal = fecha; c.costo = m.costo; c.neta = m.neta; c.reinv = null; c.retiro = null;
+    C.addMov(S, { fecha, imp: c.total, tipo: 'Cobro', caja: 'cobr', auto: true, colId: c.id });
   });
-  r.reinv = reinv; r.retiro = r2(r.neta - reinv);
   return r;
+};
+/* Deshace un cobro hecho por error: vuelve a "En curso" y saca sus movimientos de cobro. */
+C.deshacerCobro = function (S, id) {
+  const c = S.cols.find((x) => x.id === id);
+  if (!c || c.estado !== 'Cobrada') return 'Esa colocación no está cobrada.';
+  c.estado = 'En curso'; c.cobReal = null; c.costo = null; c.neta = null; c.reinv = null; c.retiro = null;
+  S.movs = S.movs.filter((m) => !(m.colId === id && (m.tipo === 'Cobro' || m.tipo === 'Pago de financiamiento' || m.tipo === 'Retiro')));
+  return null;
 };
 C.deleteCol = function (S, id) {
   const col = S.cols.find((c) => c.id === id); if (!col) return;
@@ -390,16 +428,21 @@ C.radiografia = function (S, hoy) {
   const cfg = S.cfg, R = {};
   const cur = C.enCurso(S), cob = S.cols.filter((c) => c.estado === 'Cobrada');
   const sum = (a, f) => a.reduce((x, c) => x + f(c), 0);
-  R.sinColocar = C.saldo(S);
+  const cj = C.cajas(S);
+  R.sinColocar = cj.disp; R.porAsignar = cj.cobr;
   R.colocado = sum(cur, (c) => c.cap);
   R.colPropio = sum(cur.filter((c) => c.origen === 'Propio'), (c) => c.cap);
   R.colFin = sum(cur.filter((c) => c.origen === 'Financiado'), (c) => c.cap);
   R.capPropioJuego = R.sinColocar + R.colPropio;
   R.pctPropio = R.capPropioJuego === 0 ? null : R.colPropio / R.capPropioJuego * 100;
-  R.finPend = sum(cur.filter((c) => c.origen === 'Financiado'), (c) => c.cap + C.costoFin(cfg, c.cap, c.plazo));
   const mv = (t) => sum(S.movs.filter((m) => m.tipo === t), (m) => m.imp);
-  R.aportes = mv('Aporte'); R.retiros = mv('Retiro');
-  R.netaCobrada = sum(cob, (c) => c.neta); R.reinvAcum = sum(cob, (c) => c.reinv);
+  R.aportes = mv('Aporte'); R.retiros = mv('Retiro'); R.gastos = mv('Gasto'); R.pasado = mv('Pasado a colocar');
+  R.prestado = mv('Financiamiento recibido'); R.pagadoProv = mv('Pago de financiamiento');
+  R.netaCobrada = sum(cob, (c) => c.neta);
+  // Deuda con el proveedor: lo recibido, menos lo ya devuelto, más el interés de lo ya cobrado
+  R.deuda = R.prestado - R.pagadoProv + sum(cob.filter((c) => c.origen === 'Financiado'), (c) => c.costo || 0);
+  // Por devolver = deuda + interés todavía no cobrado de lo que sigue colocado
+  R.finPend = R.deuda + sum(cur.filter((c) => c.origen === 'Financiado'), (c) => C.costoFin(cfg, c.cap, c.plazo));
   R.porCobrar = sum(cur, (c) => c.total);
   R.brutaXC = sum(cur, (c) => c.total - c.cap);
   R.costoXC = sum(cur, (c) => C.metr(c, cfg).costo);
@@ -419,13 +462,14 @@ C.radiografia = function (S, hoy) {
   R.netaPorCapDia = capDias > 0 ? netaTodas / capDias * 100 : null; // % diario sobre capital colocado
   R.propFin = capSum > 0 ? sum(todas.filter((c) => c.origen === 'Financiado'), (c) => c.cap) / capSum * 100 : null;
   const meses = {};
-  const mes = (k) => (meses[k] = meses[k] || { mes: k, aportes: 0, colocado: 0, cobrado: 0, neta: 0, retirado: 0, reinv: 0 });
+  const mes = (k) => (meses[k] = meses[k] || { mes: k, aportes: 0, colocado: 0, cobrado: 0, neta: 0, retirado: 0, gastos: 0, pasado: 0 });
   S.movs.forEach((m) => {
     const o = mes(C.monthKey(m.fecha));
     if (m.tipo === 'Aporte') o.aportes += m.imp; else if (m.tipo === 'Colocado') o.colocado += m.imp;
     else if (m.tipo === 'Cobro') o.cobrado += m.imp; else if (m.tipo === 'Retiro') o.retirado += m.imp;
+    else if (m.tipo === 'Gasto') o.gastos += m.imp; else if (m.tipo === 'Pasado a colocar') o.pasado += m.imp;
   });
-  cob.forEach((c) => { const o = mes(C.monthKey(c.cobReal)); o.neta += c.neta; o.reinv += c.reinv; });
+  cob.forEach((c) => { const o = mes(C.monthKey(c.cobReal)); o.neta += c.neta; });
   R.meses = Object.keys(meses).sort().map((k) => meses[k]);
   R.semanas = [];
   for (let i = 0; i < 8; i++) {
@@ -435,8 +479,9 @@ C.radiografia = function (S, hoy) {
   }
   const venc = cur.filter((c) => c.cob < hoy);
   R.vencidas = { cant: venc.length, cap: sum(venc, (c) => c.cap), total: sum(venc, (c) => c.total), neta: sum(venc, (c) => C.metr(c, cfg).neta) };
-  R.cuadreIzq = R.sinColocar + R.colPropio;
-  R.cuadreDer = R.aportes + R.netaCobrada - R.retiros;
+  // Toda la plata (las dos cajas) + lo que está colocado − lo que se debe = lo puesto + lo ganado − lo sacado
+  R.cuadreIzq = R.sinColocar + R.porAsignar + R.colocado - R.deuda;
+  R.cuadreDer = R.aportes + R.netaCobrada - R.retiros - R.gastos;
   R.cuadreDif = R.cuadreIzq - R.cuadreDer;
   R.cuadreOk = Math.abs(R.cuadreDif) < 0.5;
   return R;
@@ -532,8 +577,8 @@ C.csv = function (S) {
   const color = (id) => { const r = S.rends.find((x) => x.id === id); return r ? C.COLORES[r.color].n : ''; };
   const L = [['N', 'Alias', 'Capital', 'Entrega', 'Cobro', 'Plazo', 'Origen', 'Total', 'Marca', 'Estado', 'Cobro real', 'Rendicion'].map(q).join(';')];
   S.cols.slice().sort((a, b) => a.n - b.n).forEach((c) => L.push([c.n, c.alias, c.cap, c.ent, c.cob, c.plazo, c.origen, c.total, c.marca, c.estado, c.cobReal || '', color(c.rend)].map(q).join(';')));
-  L.push('', ['Fecha', 'Importe', 'Tipo', 'Origen', 'Nota'].map(q).join(';'));
-  S.movs.slice().sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id).forEach((m) => L.push([m.fecha, m.imp, m.tipo, m.auto ? 'automático' : 'manual', m.nota].map(q).join(';')));
+  L.push('', ['Fecha', 'Importe', 'Tipo', 'Caja', 'Origen', 'Nota'].map(q).join(';'));
+  S.movs.slice().sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id).forEach((m) => L.push([m.fecha, m.imp, m.tipo, m.caja === 'cobr' ? 'cobrado por asignar' : 'disponible', m.auto ? 'automático' : 'manual', m.nota].map(q).join(';')));
   return L.join('\r\n') + '\r\n';
 };
 C.validarEstado = function (o) {

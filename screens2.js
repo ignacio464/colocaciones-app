@@ -16,32 +16,26 @@ App.openCobro = function (ids) {
   if (!r.cols.length) { UI.toast('No hay colocaciones en curso para cobrar.'); return; }
   UI.modal((close) => {
     const fecha = dateInput(App.hoy()), err = h('div');
-    const reinv = UI.num(numStr(r.reinv)), retiro = UI.num(numStr(r.retiro));
-    reinv.addEventListener('input', () => { const v = C.parseNum(reinv.value); if (isFinite(v)) retiro.value = numStr(C.r2(r.neta - v)); });
-    retiro.addEventListener('input', () => { const v = C.parseNum(retiro.value); if (isFinite(v)) reinv.value = numStr(C.r2(r.neta - v)); });
     const line = (k, v, b) => h('div', { class: 'row sp' }, h('span', null, k), h('span', { class: 'num', style: null }, b ? h('strong', null, v) : v));
     const box = h('div');
     const confirmar = async () => {
-      const f = C.parseEntrega(fecha.value, App.hoy()), rv = C.parseNum(reinv.value), rt = C.parseNum(retiro.value);
-      const es = [];
-      if (!f) es.push('La fecha de cobro no es válida.');
-      if (!isFinite(rv) || rv < 0) es.push('El monto a reinvertir no es válido.');
-      if (!isFinite(rt) || rt < 0) es.push('El monto a retirar no es válido.');
-      if (isFinite(rv) && isFinite(rt) && Math.abs(rv + rt - r.neta) > 0.5) es.push('Reinvertir + retirar debe dar la ganancia neta (' + $(r.neta) + ').');
-      if (es.length) { err.replaceChildren(errBox(es)); return; }
-      C.cobrar(S, r.cols.map((c) => c.id), f, rv);
+      const f = C.parseEntrega(fecha.value, App.hoy());
+      if (!f) { err.replaceChildren(errBox(['La fecha de cobro no es válida.'])); return; }
+      C.cobrar(S, r.cols.map((c) => c.id), f);
       await App.commit();
-      box.replaceChildren(h('div', null, h('div', { class: 'alert ok' }, h('strong', null, 'Cobro registrado.'), h('div', null, 'Ahora tenés ' + $(C.saldo(S)) + ' sin colocar.')),
-        h('div', { class: 'grid2' }, UI.btn('Colocar ahora', 'pri', () => { close(); App.go('rendicion'); }), UI.btn('Cerrar', 'ghost', close))));
+      const cj = C.cajas(S);
+      box.replaceChildren(h('div', null,
+        h('div', { class: 'alert ok' }, h('strong', null, 'Cobro registrado.'), h('div', null, 'Entraron ' + $(r.total) + ' a «Cobrado por asignar».'), h('div', null, 'Cobrado por asignar: ' + $(cj.cobr) + ' · Disponible para colocar: ' + $(cj.disp))),
+        h('div', { class: 'grid2' }, UI.btn('Asignar ahora', 'pri', () => { close(); App.go('dinero'); }), UI.btn('Cerrar', 'ghost', close))));
     };
     box.appendChild(h('div', null, h('h2', null, 'Cobrar ' + r.cant + (r.cant === 1 ? ' colocación' : ' colocaciones')),
       UI.field('Fecha de cobro', fecha),
       h('div', { class: 'card' },
-        line('Capital recuperado', $(r.capital)), line('Total cobrado', $(r.total)), line('Ganancia bruta', $(r.bruta)),
+        line('Capital recuperado', $(r.capital)), line('Ganancia bruta', $(r.bruta)),
         r.costo > 0 ? line('Costo de financiamiento', '−' + $(r.costo)) : null, line('Ganancia neta', $(r.neta), true),
-        r.pagoFin > 0 ? line('A devolver al financista', $(r.pagoFin)) : null),
-      UI.field('A reinvertir', reinv), UI.field('A retirar', retiro), err,
-      h('div', { class: 'grid2', style: null }, UI.btn('Cancelar', 'ghost', close), UI.btn('Confirmar cobro', 'pri', confirmar))));
+        line('Total que entra', $(r.total), true)),
+      h('p', { class: 'mut small' }, 'El total entra a «Cobrado por asignar». No se retira ni se paga nada solo: después decidís qué pasar a colocar y qué apartar.'),
+      err, h('div', { class: 'grid2', style: null }, UI.btn('Cancelar', 'ghost', close), UI.btn('Confirmar cobro', 'pri', confirmar))));
     return box;
   });
 };
@@ -176,6 +170,8 @@ async function guardarRendicion() {
   if (first) { UI.toast('Hay filas con error: revisalas (marcadas en rojo). No se perdió nada.'); first.el.card.scrollIntoView({ block: 'center' }); return; }
   const dup = ns.filter((n, i) => ns.indexOf(n) !== i || S.cols.some((c) => c.n === n));
   if (dup.length && !(await UI.confirm('Se repiten estos N°: ' + Array.from(new Set(dup)).join(', ') + '. ¿Guardar igual?', { ok: 'Guardar igual' }))) return;
+  const necesita = filas.filter((f) => f.origen === 'Propio').reduce((a, f) => a + f.cap, 0), disp = C.cajas(S).disp;
+  if (necesita > disp + 0.005 && !(await UI.confirm('Esta rendición coloca ' + $(necesita) + ' con capital propio y el disponible para colocar es ' + $(disp) + ' (faltan ' + $(necesita - disp) + '). Si seguís, el disponible queda en negativo. ¿Guardar igual?', { ok: 'Guardar igual' }))) return;
   C.addRend(S, { fecha: rd.fecha, color: rd.color, nombre: rd.nombre.trim() }, filas);
   await App.commit(true);
   initRend(); newRowInto();
@@ -265,7 +261,8 @@ SC.rendicion = function () {
   return {
     title: 'Rendición',
     body: h('div', null,
-      h('div', { class: 'alert info' }, 'Saldo disponible para colocar: ', h('strong', null, $(C.saldo(S)))),
+      h('div', { class: 'alert info' }, h('div', null, 'Disponible para colocar: ', h('strong', null, $(C.cajas(S).disp))),
+        C.cajas(S).cobr > 0.5 ? h('div', { class: 'row' }, h('div', { class: 'grow small' }, 'Además tenés ' + $(C.cajas(S).cobr) + ' cobrado por asignar.'), UI.btn('Asignar', 'sm', () => App.go('dinero'))) : null),
       h('div', { class: 'card' },
         UI.field('Fecha de la rendición (entrega por defecto)', fechaIn),
         h('label', { class: 'f' }, 'Color de la rendición'), colorPick,
@@ -399,7 +396,9 @@ SC.colocaciones = function () {
       h('div', { class: 'num' }, $(c.cap) + ' → ' + $(c.total)),
       h('div', { class: 'mut small' }, C.fmtDM(c.ent) + ' → ' + C.fmtDate(c.cob) + ' · ' + e.txt),
       h('div', null, h('span', { class: 'tag' }, c.origen), h('span', { class: 'tag' }, c.marca), h('span', { class: 'mut small' }, App.colorName(App.colorOf(c)))),
-      sel ? null : h('div', { class: 'row', style: null }, UI.btn('Editar', 'sm', () => openEdit(c)), UI.btn('Eliminar', 'sm ghost', () => borrarCol(c)), c.estado === 'En curso' ? UI.btn('Cobrar', 'sm', () => App.openCobro([c.id])) : null));
+      sel ? null : h('div', { class: 'row', style: null }, UI.btn('Editar', 'sm', () => openEdit(c)), UI.btn('Eliminar', 'sm ghost', () => borrarCol(c)), c.estado === 'En curso' ? UI.btn('Cobrar', 'sm', () => App.openCobro([c.id])) : UI.btn('Deshacer cobro', 'sm ghost', async () => {
+        if (await UI.confirm('¿Deshacer el cobro de ' + App.titulo(c) + '? Vuelve a "En curso" y se saca su cobro de «Cobrado por asignar».', { ok: 'Deshacer cobro', danger: true })) { C.deshacerCobro(S, c.id); await App.commit(); }
+      })));
   });
   let bar = null;
   if (sel) {

@@ -35,6 +35,21 @@ tabla;<plazo1>;<plazo2>;...     cabecera de la tabla (cualquier cantidad de plaz
 
 La configuración se valida antes de aplicarse, se puede editar celda por celda y exportar en el mismo formato desde **Configuración**.
 
+## Cómo se mueve la plata (dos cajas)
+
+Nada se mueve solo. Hay dos cajas:
+
+- **Disponible para colocar:** lo que vas a poner a trabajar. Lo que sobra sin colocar se arrastra solo.
+- **Cobrado por asignar:** el total de cada cobro cae acá. Vos decidís qué hacer.
+
+Desde **Mover plata** (o desde la tarjeta de cada caja):
+
+- **Pasar a colocar:** lleva plata de «Cobrado por asignar» a «Disponible para colocar».
+- **Apartar:** saca plata de una caja para el proveedor (devolución), gastos o un retiro tuyo, con una nota.
+- **Agregar capital:** solo para plata que viene de afuera (tuya o prestada por el proveedor). No se carga acá plata que ya vino de un cobro.
+
+Cobrar solo registra el cobro y calcula la ganancia. Un cobro hecho por error se puede deshacer desde la colocación. En **Radiografía**, el **Cuadre** comprueba que todo cierre; si hay diferencia, la muestra sin corregir nada.
+
 ## Recordatorios (honestidad sobre las notificaciones)
 
 La app **no manda notificaciones propias**: sin servidor no pueden ser confiables. Lo que hace:

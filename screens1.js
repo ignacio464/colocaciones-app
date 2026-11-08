@@ -44,6 +44,8 @@ App.alertas = function () {
   if (venc.length) L.push({ cls: 'bad', txt: venc.length + (venc.length === 1 ? ' colocación vencida sin cobrar' : ' colocaciones vencidas sin cobrar') + ' (filas ' + C.listaN(venc) + ').', go: 'vencimientos' });
   const prox = cur.filter((c) => c.cob >= hoy && c.cob <= C.addDays(hoy, 3));
   if (prox.length) L.push({ cls: 'warn', txt: 'Vencen en los próximos 3 días: ' + prox.length + ' (filas ' + C.listaN(prox) + '), ' + $(prox.reduce((a, c) => a + c.total, 0)) + ' a cobrar.', go: 'vencimientos' });
+  const cj = C.cajas(S);
+  if (cj.cobr > 0.5) L.push({ cls: 'info', txt: 'Tenés ' + $(cj.cobr) + ' cobrado por asignar: pasalo a colocar o apartalo.', go: 'dinero' });
   const ub = S.meta.ultBackup;
   if (S.cols.length || S.movs.length) {
     if (!ub) L.push({ cls: 'warn', txt: 'Todavía no hiciste ningún respaldo.', go: 'respaldo' });
@@ -51,33 +53,36 @@ App.alertas = function () {
   }
   const np = C.calPendientes(S, hoy);
   if (np) L.push({ cls: 'info', txt: 'Tenés ' + np + (np === 1 ? ' vencimiento que no pasaste al calendario.' : ' vencimientos que no pasaste al calendario.'), go: 'vencimientos' });
-  const sal = C.saldo(S);
-  if (S.cfg.alertaSaldo > 0 && sal > S.cfg.alertaSaldo) L.push({ cls: 'info', txt: 'Tenés ' + $(sal) + ' sin colocar (más del límite que elegiste).', go: 'rendicion' });
+  if (S.cfg.alertaSaldo > 0 && cj.disp > S.cfg.alertaSaldo) L.push({ cls: 'info', txt: 'Tenés ' + $(cj.disp) + ' sin colocar (más del límite que elegiste).', go: 'rendicion' });
   return L;
 };
 SC.inicio = function () {
-  const S = App.S, hoy = App.hoy(), cur = C.enCurso(S), cfg = S.cfg;
+  const S = App.S, hoy = App.hoy(), cur = C.enCurso(S);
   const sum = (a, f) => a.reduce((x, c) => x + f(c), 0);
   const cobradas = S.cols.filter((c) => c.estado === 'Cobrada');
-  const fin = cur.filter((c) => c.origen === 'Financiado');
-  const saldo = C.saldo(S);
+  const cj = C.cajas(S), R = C.radiografia(S, hoy);
   const nodes = [];
+  nodes.push(h('div', { class: 'grid2' },
+    h('button', { type: 'button', class: 'card caja tap' + (cj.disp < 0 ? ' neg' : ''), onclick: () => App.go('dinero'), 'aria-label': 'Disponible para colocar. Ver plata' },
+      h('div', { class: 'mut small' }, 'Disponible para colocar'), h('div', { class: 'big num' }, $(cj.disp))),
+    h('button', { type: 'button', class: 'card caja tap' + (cj.cobr > 0 ? ' pend' : ''), onclick: () => App.go('dinero'), 'aria-label': 'Cobrado por asignar. Ver plata' },
+      h('div', { class: 'mut small' }, 'Cobrado por asignar'), h('div', { class: 'big num' }, $(cj.cobr)))));
+  nodes.push(h('p', { class: 'mut small' }, 'Cobrado por asignar: plata que entró por cobros y todavía no decidiste qué hacer con ella.'));
   nodes.push(h('div', { class: 'grid3' },
-    UI.btn('Agregar capital', 'pri xl', () => App.go('aporte')),
+    UI.btn('Agregar capital', 'pri xl', () => App.abrirMov('capital')),
     UI.btn('Nueva rendición', 'pri xl', () => App.go('rendicion')),
-    UI.btn('Radiografía', 'pri xl', () => App.go('radiografia'))));
-  nodes.push(h('div', { class: 'grid3', style: null }, UI.btn('Bloquear ahora', 'ghost sm', App.lockNow), UI.btn('Configuración', 'ghost sm', () => App.go('config')), UI.btn('Respaldo', 'ghost sm', () => App.go('respaldo'))));
+    UI.btn('Mover plata', 'pri xl', () => App.go('dinero'))));
+  nodes.push(h('div', { class: 'grid2', style: null }, UI.btn('Radiografía', 'ghost sm', () => App.go('radiografia')), UI.btn('Respaldo', 'ghost sm', () => App.go('respaldo')),
+    UI.btn('Configuración', 'ghost sm', () => App.go('config')), UI.btn('Bloquear ahora', 'ghost sm', App.lockNow)));
   App.alertas().forEach((a) => nodes.push(h('div', { class: 'alert ' + a.cls }, h('div', { class: 'row' }, h('div', { class: 'grow' }, a.txt), a.go ? UI.btn('Ver', 'sm ghost', () => App.go(a.go)) : null))));
+  if (cj.disp < 0) nodes.push(h('div', { class: 'alert warn' }, 'El disponible para colocar está en negativo: falta cargar capital o pasar plata desde «Cobrado por asignar».'));
   nodes.push(h('div', { class: 'stats', style: null },
     App.stat('Capital en curso', $(sum(cur, (c) => c.cap))),
     App.stat('Total a devolverse', $(sum(cur, (c) => c.total))),
     App.stat('Ganancia a cobrar', $(sum(cur, (c) => c.total - c.cap))),
-    App.stat('Saldo disponible (tocá para ver)', $(saldo), saldo < 0 ? 'warn' : '', () => App.go('dinero')),
     App.stat('Ganancia neta ya cobrada', $(sum(cobradas, (c) => c.neta))),
     App.stat('Colocaciones en curso', String(cur.length)),
-    App.stat('Capital financiado en curso', $(sum(fin, (c) => c.cap))),
-    App.stat('Costo de financiamiento pendiente', $(sum(fin, (c) => C.costoFin(cfg, c.cap, c.plazo))))));
-  if (saldo < 0) nodes.push(h('div', { class: 'alert warn' }, 'El saldo disponible está en negativo. Revisá los movimientos de Dinero.'));
+    App.stat('Por devolver al proveedor', $(Math.max(0, R.finPend)))));
   const pr = C.proximaRendicion(S, hoy);
   nodes.push(h('h2', null, 'Próxima rendición'));
   nodes.push(pr ? h('button', { type: 'button', class: 'card full', style: null, onclick: () => App.go('vencimientos'), 'aria-label': 'Ver vencimientos' },
@@ -98,69 +103,107 @@ SC.inicio = function () {
   return { title: 'Inicio', body: h('div', null, nodes) };
 };
 
-/* ---------- Dinero para colocar ---------- */
-function movForm(tipo, mov, done) {
-  const imp = UI.num(mov ? mov.imp : ''), fecha = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'off', value: C.fmtDate(mov ? mov.fecha : App.hoy()) });
-  const nota = h('input', { type: 'text', autocomplete: 'off', value: mov ? mov.nota : '' });
-  const err = h('div');
-  const save = async () => {
-    const v = C.parseNum(imp.value), f = C.parseEntrega(fecha.value, App.hoy());
-    const es = [];
-    if (!(v > 0)) es.push('El importe debe ser mayor que 0.');
-    if (!f) es.push('La fecha no es válida (dd/mm/aaaa).');
-    if (es.length) { err.replaceChildren(errBox(es)); return null; }
-    if (mov) { mov.imp = v; mov.fecha = f; mov.nota = nota.value.trim(); }
-    else C.addMov(App.S, { fecha: f, imp: v, tipo, nota: nota.value.trim() });
-    await App.commit(true);
-    return v;
-  };
-  return { imp, fecha, nota, err, save };
+/* ---------- Plata: las dos cajas ---------- */
+const CAJA_TXT = { disp: 'Disponible para colocar', cobr: 'Cobrado por asignar' };
+const TIT_KIND = { pasar: 'Pasar a colocar', apartar: 'Apartar plata', capital: 'Agregar capital' };
+function cajaDeMov(m) {
+  if (m.tipo === 'Pasado a colocar') return 'Cobrado → Disponible';
+  if (m.tipo === 'Aporte' || m.tipo === 'Financiamiento recibido' || m.tipo === 'Colocado') return CAJA_TXT.disp;
+  return CAJA_TXT[m.caja === 'cobr' ? 'cobr' : 'disp'];
 }
-SC.dinero = function () {
-  const S = App.S, saldo = C.saldo(S), f = App.ui.movFiltro || 'Todos';
-  const open = (tipo, mov) => UI.modal((close) => {
-    const m = movForm(tipo, mov);
-    return h('div', null, h('h2', null, (mov ? 'Editar ' : '') + (tipo === 'Aporte' ? 'aporte' : 'retiro')),
-      UI.field('Importe', m.imp), UI.field('Fecha', m.fecha), UI.field('Nota (opcional)', m.nota), m.err,
-      h('div', { class: 'grid2', style: null }, UI.btn('Cancelar', 'ghost', close), UI.btn('Guardar', 'pri', async () => { if (await m.save()) { close(); App.render(); } })));
+/* Ventana para pasar plata, apartarla o agregar capital (nuevo o editando). */
+App.abrirMov = function (kind, mov, despues) {
+  const S = App.S;
+  UI.modal((close) => {
+    const cj = C.cajas(S, mov ? mov.id : null);
+    const R = C.radiografia(S, App.hoy());
+    const fmtN = (v) => C.fmt(v, Math.floor(v) === v ? 0 : 2);
+    const impIn = UI.num(mov ? fmtN(mov.imp) : (kind === 'pasar' && cj.cobr > 0 ? fmtN(cj.cobr) : ''));
+    const fecha = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'off', value: C.fmtDate(mov ? mov.fecha : App.hoy()) });
+    const nota = h('input', { type: 'text', autocomplete: 'off', value: mov ? mov.nota : '' });
+    const err = h('div'), box = h('div');
+    let cajaSel = null, destSel = null, origenSel = null;
+    const campos = [];
+    if (kind === 'apartar') {
+      const cajaIni = mov ? (mov.caja === 'cobr' ? 'cobr' : 'disp') : (cj.cobr > 0 ? 'cobr' : 'disp');
+      cajaSel = UI.sel([['cobr', 'Cobrado por asignar (' + $(cj.cobr) + ')'], ['disp', 'Disponible para colocar (' + $(cj.disp) + ')']], cajaIni);
+      const destIni = mov ? (mov.destino || (mov.tipo === 'Pago de financiamiento' ? 'Proveedor' : mov.tipo === 'Gasto' ? 'Gastos' : 'Retiro mío')) : 'Proveedor';
+      destSel = UI.sel(C.DESTINOS.map((d) => d[0]), destIni, () => hint());
+      campos.push(UI.field('¿De dónde sale la plata?', cajaSel), UI.field('¿Para qué?', destSel));
+    }
+    if (kind === 'capital') {
+      origenSel = UI.sel([['mio', 'Es mío (aporte)'], ['proveedor', 'Me lo prestó el proveedor']], mov && mov.tipo === 'Financiamiento recibido' ? 'proveedor' : 'mio');
+      campos.push(UI.field('¿De quién es?', origenSel));
+    }
+    const hintBox = h('div', { class: 'small' });
+    const hint = () => {
+      if (kind !== 'apartar') return;
+      if (destSel.value === 'Proveedor') {
+        hintBox.replaceChildren(h('div', { class: 'alert info' }, 'Por devolver al proveedor: ', h('strong', null, $(R.finPend)), ' ', UI.btn('Usar ese monto', 'sm ghost', () => { impIn.value = C.fmt(Math.max(0, R.finPend), Math.floor(R.finPend) === R.finPend ? 0 : 2); })));
+      } else hintBox.replaceChildren();
+    };
+    hint();
+    const info = {
+      pasar: 'Pasa plata de «Cobrado por asignar» a «Disponible para colocar», para ponerla a trabajar.',
+      apartar: 'Saca plata de una caja para el proveedor, gastos o un retiro tuyo. Queda anotado con su nota.',
+      capital: 'Suma a «Disponible para colocar». No es ganancia. No cargues acá plata que ya viene de un cobro.'
+    }[kind];
+    const guardar = async () => {
+      const o = { kind, imp: C.parseNum(impIn.value), fecha: C.parseEntrega(fecha.value, App.hoy()), nota: nota.value.trim() };
+      if (kind === 'apartar') { o.caja = cajaSel.value; o.destino = destSel.value; }
+      if (kind === 'capital') o.origen = origenSel.value;
+      const e = C.validarMov(S, o, mov);
+      if (e) { err.replaceChildren(errBox([e])); return; }
+      C.guardarMov(S, o, mov);
+      await App.commit(true);
+      const c2 = C.cajas(S);
+      if (mov || kind === 'apartar') { close(); UI.toast('Guardado. Disponible: ' + $(c2.disp) + ' · Por asignar: ' + $(c2.cobr)); App.render(); return; }
+      box.replaceChildren(h('div', null,
+        h('div', { class: 'alert ok' }, h('strong', null, 'Listo.'), h('div', null, 'Disponible para colocar: ' + $(c2.disp)), h('div', null, 'Cobrado por asignar: ' + $(c2.cobr))),
+        h('div', { class: 'grid2' }, UI.btn('Colocar ahora', 'pri', () => { close(); App.go('rendicion'); }), UI.btn('Cerrar', 'ghost', () => { close(); App.render(); }))));
+      App.render();
+    };
+    box.appendChild(h('div', null, h('h2', null, (mov ? 'Editar · ' : '') + TIT_KIND[kind]), h('p', { class: 'mut small' }, info),
+      campos, hintBox, UI.field('Importe', impIn), UI.field('Fecha', fecha), UI.field('Nota (opcional)', nota), err,
+      h('div', { class: 'grid2', style: null }, UI.btn('Cancelar', 'ghost', close), UI.btn('Guardar', 'pri', guardar))));
+    return box;
   });
+};
+
+SC.dinero = function () {
+  const S = App.S, cj = C.cajas(S), R = C.radiografia(S, App.hoy()), f = App.ui.movFiltro || 'Todos';
   const movs = S.movs.filter((m) => f === 'Todos' || m.tipo === f).sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : b.id - a.id));
   return {
-    title: 'Dinero para colocar', back: 'inicio',
+    title: 'Plata', back: 'inicio',
     body: h('div', null,
-      h('div', { class: 'card' }, h('div', { class: 'mut' }, 'Saldo disponible'), h('div', { class: 'big num' }, $(saldo))),
-      saldo < 0 ? h('div', { class: 'alert warn' }, 'El saldo quedó en negativo. No se bloquea nada: revisá los movimientos.') : null,
-      h('div', { class: 'grid2' }, UI.btn('Aporte', 'pri', () => open('Aporte')), UI.btn('Retiro', '', () => open('Retiro'))),
-      h('label', { class: 'f' }, 'Filtrar por tipo'),
+      h('div', { class: 'grid2' },
+        h('div', { class: 'card caja' + (cj.disp < 0 ? ' neg' : '') }, h('div', { class: 'mut small' }, 'Disponible para colocar'), h('div', { class: 'big num' }, $(cj.disp)), h('div', { class: 'mut small' }, 'Lo que vas a poner a trabajar.')),
+        h('div', { class: 'card caja' + (cj.cobr > 0 ? ' pend' : '') }, h('div', { class: 'mut small' }, 'Cobrado por asignar'), h('div', { class: 'big num' }, $(cj.cobr)), h('div', { class: 'mut small' }, 'Entró por cobros. Vos decidís qué hacer.'))),
+      cj.disp < 0 ? h('div', { class: 'alert warn' }, 'El disponible para colocar está en negativo. Falta cargar capital o pasar plata desde «Cobrado por asignar».') : null,
+      cj.cobr < 0 ? h('div', { class: 'alert warn' }, 'Cobrado por asignar está en negativo: se apartó más de lo cobrado. Revisá los movimientos.') : null,
+      R.finPend > 0.5 || R.deuda > 0.5 ? h('div', { class: 'alert info' }, 'Por devolver al proveedor: ', h('strong', null, $(R.finPend)), h('div', { class: 'small' }, 'Capital recibido que no devolviste, más el interés.')) : null,
+      h('div', { class: 'grid3', style: null },
+        UI.btn('Pasar a colocar', 'pri', () => App.abrirMov('pasar')), UI.btn('Apartar', '', () => App.abrirMov('apartar')), UI.btn('Agregar capital', '', () => App.abrirMov('capital'))),
+      h('details', null, h('summary', { class: 'btn ghost full', style: null }, '¿Cómo funciona?'),
+        h('div', { class: 'card small' },
+          h('p', null, h('strong', null, 'Cobrar'), ' no mueve nada solo: el total cobrado cae en «Cobrado por asignar».'),
+          h('p', null, h('strong', null, 'Pasar a colocar'), ' lo lleva a «Disponible para colocar» (lo que sobra sin colocar se arrastra solo).'),
+          h('p', null, h('strong', null, 'Apartar'), ' lo saca para el proveedor, gastos o un retiro tuyo.'),
+          h('p', null, h('strong', null, 'Agregar capital'), ' es solo para plata que viene de afuera.'))),
+      h('label', { class: 'f' }, 'Filtrar movimientos por tipo'),
       UI.sel(['Todos'].concat(C.TIPOS), f, (e) => { App.ui.movFiltro = e.target.value; App.render(); }),
       h('h2', null, 'Movimientos'),
       movs.length ? movs.map((m) => {
-        const entra = C.TIPOS_IN.indexOf(m.tipo) >= 0;
+        const entra = m.tipo === 'Aporte' || m.tipo === 'Financiamiento recibido' || m.tipo === 'Cobro';
+        const signo = m.tipo === 'Pasado a colocar' ? '→ ' : entra ? '+' : '−';
+        const col = m.colId ? S.cols.find((x) => x.id === m.colId) : null;
         return h('div', { class: 'card' },
-          h('div', { class: 'row sp' }, h('strong', null, m.tipo), h('strong', { class: 'num' }, (entra ? '+' : '−') + $(m.imp))),
-          h('div', { class: 'mut small' }, C.fmtDate(m.fecha) + ' · ' + (m.auto ? 'automático' : 'manual') + (m.colId ? ' · ' + (() => { const c = S.cols.find((x) => x.id === m.colId); return c ? 'N° ' + c.n : ''; })() : '') + (m.nota ? ' · ' + m.nota : '')),
-          !m.auto ? h('div', { class: 'row', style: null }, UI.btn('Editar', 'sm', () => open(m.tipo, m)), UI.btn('Borrar', 'sm bad', async () => {
+          h('div', { class: 'row sp' }, h('strong', null, m.tipo + (m.destino && m.tipo !== 'Pago de financiamiento' ? ' · ' + m.destino : '')), h('strong', { class: 'num' }, signo + $(m.imp))),
+          h('div', { class: 'mut small' }, C.fmtDate(m.fecha) + ' · ' + cajaDeMov(m) + (m.auto ? ' · automático' : '') + (col ? ' · N° ' + col.n : '') + (m.nota ? ' · ' + m.nota : '')),
+          !m.auto ? h('div', { class: 'row', style: null }, UI.btn('Editar', 'sm', () => App.abrirMov(C.kindDe(m), m)), UI.btn('Borrar', 'sm bad', async () => {
             if (await UI.confirm('¿Borrar este movimiento de ' + $(m.imp) + '?', { ok: 'Borrar', danger: true })) { S.movs = S.movs.filter((x) => x !== m); await App.commit(); }
           })) : null);
       }) : h('p', { class: 'mut' }, 'Todavía no hay movimientos.'))
-  };
-};
-
-SC.aporte = function () {
-  const ok = App.ui.aporteOk;
-  if (ok) {
-    return {
-      title: 'Agregar capital', back: 'inicio',
-      body: h('div', null, h('div', { class: 'alert ok' }, h('strong', null, 'Ahora tenés ' + $(C.saldo(App.S)) + ' sin colocar.')),
-        h('div', { class: 'grid2' }, UI.btn('Colocar ahora', 'pri', () => { App.ui.aporteOk = null; App.go('rendicion'); }), UI.btn('Agregar otro', '', () => { App.ui.aporteOk = null; App.render(); })))
-    };
-  }
-  const m = movForm('Aporte', null);
-  return {
-    title: 'Agregar capital', back: 'inicio',
-    body: h('div', null, h('p', { class: 'mut' }, 'Un aporte suma al saldo disponible y no es ganancia.'),
-      UI.field('Monto', m.imp), UI.field('Fecha', m.fecha), UI.field('Nota (opcional)', m.nota), m.err,
-      h('div', { style: null }, UI.btn('Guardar aporte', 'pri full', async () => { if (await m.save()) { App.ui.aporteOk = true; App.render(); } })))
   };
 };
 
@@ -186,11 +229,11 @@ SC.radiografia = function () {
     title: 'Radiografía', back: 'inicio',
     body: h('div', null,
       h('h2', null, 'A. Capital hoy'),
-      tbl([row('Sin colocar', $(R.sinColocar)), row('Colocado en curso', $(R.colocado)), row('   · Propio', $(R.colPropio)), row('   · Financiado', $(R.colFin)),
+      tbl([row('Disponible para colocar', $(R.sinColocar)), row('Cobrado por asignar', $(R.porAsignar)), row('Colocado en curso', $(R.colocado)), row('   · Propio', $(R.colPropio)), row('   · Financiado', $(R.colFin)),
         row('Capital propio en juego', $(R.capPropioJuego)), row('% de capital propio colocado', R.pctPropio == null ? '—' : C.pct(R.pctPropio)),
-        row('Financiamiento pendiente de devolver', $(R.finPend))]),
+        row('Por devolver al proveedor', $(R.finPend))]),
       h('h2', null, 'B. Acumulados'),
-      tbl([row('Aportes acumulados', $(R.aportes)), row('Ganancia neta cobrada', $(R.netaCobrada)), row('Retiros acumulados', $(R.retiros)), row('Reinvertido acumulado', $(R.reinvAcum)),
+      tbl([row('Aportes acumulados', $(R.aportes)), row('Ganancia neta cobrada', $(R.netaCobrada)), row('Retiros acumulados', $(R.retiros)), row('Gastos acumulados', $(R.gastos)), row('Pasado a colocar acumulado', $(R.pasado)),
         row('Total a cobrar (en curso)', $(R.porCobrar)), row('Ganancia bruta por cobrar', $(R.brutaXC)), row('Costo de financiamiento por cobrar', $(R.costoXC)),
         row('Ganancia neta por cobrar', $(R.netaXC)), row('Resultado total', $(R.resultado))]),
       h('h2', null, 'C. Rendimiento'),
@@ -202,8 +245,8 @@ SC.radiografia = function () {
       h('h2', null, 'D. Por mes'),
       bars,
       R.meses.length ? h('div', { class: 'tscroll' }, h('table', null,
-        h('thead', null, h('tr', null, ['Mes', 'Aportes', 'Colocado', 'Cobrado', 'Neta', 'Retirado', 'Reinv.'].map((t) => h('th', null, t)))),
-        h('tbody', null, R.meses.map((m) => h('tr', null, h('td', null, m.mes.slice(5) + '/' + m.mes.slice(0, 4)), [m.aportes, m.colocado, m.cobrado, m.neta, m.retirado, m.reinv].map((v) => h('td', { class: 'num' }, C.fmt(Math.round(v))))))))) : null,
+        h('thead', null, h('tr', null, ['Mes', 'Aportes', 'Colocado', 'Cobrado', 'Neta', 'Retirado', 'Gastos', 'Pasado'].map((t) => h('th', null, t)))),
+        h('tbody', null, R.meses.map((m) => h('tr', null, h('td', null, m.mes.slice(5) + '/' + m.mes.slice(0, 4)), [m.aportes, m.colocado, m.cobrado, m.neta, m.retirado, m.gastos, m.pasado].map((v) => h('td', { class: 'num' }, C.fmt(Math.round(v))))))))) : null,
       h('h2', null, 'E. Cobros de las próximas 8 semanas'),
       R.vencidas.cant ? h('div', { class: 'alert bad' }, 'Vencidas sin cobrar: ' + R.vencidas.cant + ' · capital ' + $(R.vencidas.cap) + ' · total ' + $(R.vencidas.total) + ' · neta ' + $(R.vencidas.neta)) : null,
       h('div', { class: 'tscroll' }, h('table', null,
@@ -211,7 +254,7 @@ SC.radiografia = function () {
         h('tbody', null, R.semanas.map((w) => h('tr', null, h('td', null, C.fmtDM(w.desde) + '–' + C.fmtDM(w.hasta)), [C.fmt(w.cant), C.fmt(Math.round(w.cap)), C.fmt(Math.round(w.total)), C.fmt(Math.round(w.neta))].map((v) => h('td', { class: 'num' }, v))))))),
       h('h2', null, 'F. Cuadre'),
       R.cuadreOk ? h('div', { class: 'alert ok' }, h('strong', null, 'Cuadre OK'))
-        : h('div', { class: 'alert bad' }, h('strong', null, 'Diferencia de ' + $(R.cuadreDif)), h('div', { class: 'small' }, 'Sin colocar + colocado Propio en curso (' + $(R.cuadreIzq) + ') debería ser igual a aportes + ganancia neta cobrada − retiros (' + $(R.cuadreDer) + '). No se corrigió nada.'), UI.btn('Ver movimientos', 'sm', () => App.go('dinero'))))
+        : h('div', { class: 'alert bad' }, h('strong', null, 'Diferencia de ' + $(R.cuadreDif)), h('div', { class: 'small' }, 'La plata (las dos cajas) + lo colocado − lo que se debe al proveedor (' + $(R.cuadreIzq) + ') debería ser igual a aportes + ganancia neta cobrada − retiros − gastos (' + $(R.cuadreDer) + '). No se corrigió nada.'), UI.btn('Ver movimientos', 'sm', () => App.go('dinero'))))
   };
 };
 
@@ -318,7 +361,7 @@ SC.config = function () {
     body: h('div', null, errs,
       h('h2', null, 'Tasas y reglas'),
       txt('tasa_propia', 'Tasa mensual del capital propio (%)'), txt('tasa_tabla', 'Tasa mensual de la tarifa Tabla (%)'),
-      txt('costo', 'Costo mensual del capital financiado (%)'), txt('reinv', '% de la ganancia neta que se reinvierte'), txt('redondeo', 'Múltiplo de redondeo para totales estimados'),
+      txt('costo', 'Costo mensual del capital financiado (%)'), txt('reinv', '% de reinversión (solo para la Calculadora)'), txt('redondeo', 'Múltiplo de redondeo para totales estimados'),
       tarifaSel('tarifaPropio', 'Tarifa del origen Propio'), tarifaSel('tarifaFin', 'Tarifa del origen Financiado'),
       h('h2', null, 'Tabla de tarifas'), tablaBox,
       h('h2', null, 'Alertas, bloqueo y calendario'),
